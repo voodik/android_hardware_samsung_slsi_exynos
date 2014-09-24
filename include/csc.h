@@ -60,7 +60,89 @@ typedef enum _CSC_MEMTYPE {
     CSC_MEMORY_USERPTR,
     CSC_MEMORY_OVERLAY,
     CSC_MEMORY_DMABUF,
+    CSC_MEMORY_MFC,
 } CSC_MEMTYPE;
+
+typedef enum _CSC_HW_ID {
+    CSC_HW_GSC0 = 0,
+    CSC_HW_GSC1,
+    CSC_HW_GSC2,
+    CSC_HW_GSC3,
+    CSC_HW_SC0,
+    CSC_HW_SC1,
+    CSC_HW_SC2,
+    CSC_HW_MAX,
+} CSC_HW_ID;
+
+typedef enum _CSC_PLANE {
+    CSC_Y_PLANE = 0,
+    CSC_RGB_PLANE = 0,
+    CSC_U_PLANE = 1,
+    CSC_UV_PLANE = 1,
+    CSC_V_PLANE = 2
+} CSC_PLANE;
+
+typedef enum _CSC_HW_TYPE {
+    CSC_HW_TYPE_FIMC = 0,
+    CSC_HW_TYPE_GSCALER
+} CSC_HW_TYPE;
+
+typedef enum _CSC_EQ_MODE {
+    CSC_EQ_MODE_USER = 0,
+    CSC_EQ_MODE_AUTO
+} CSC_EQ_MODE;
+
+typedef enum _CSC_EQ_COLORSPACE {
+    CSC_EQ_COLORSPACE_SMPTE170M = 1,
+    CSC_EQ_COLORSPACE_SMPTE240M,
+    CSC_EQ_COLORSPACE_REC709,
+    CSC_EQ_COLORSPACE_BT878,
+    CSC_EQ_COLORSPACE_470_SYSTEM_M,
+    CSC_EQ_COLORSPACE_470_SYSTEM_BG
+} CSC_EQ_COLORSPACE;
+
+typedef enum _CSC_EQ_RANGE {
+    CSC_EQ_RANGE_NARROW = 0,
+    CSC_EQ_RANGE_FULL
+} CSC_EQ_RANGE;
+
+typedef struct _CSC_FORMAT {
+    unsigned int width;
+    unsigned int height;
+    unsigned int crop_left;
+    unsigned int crop_top;
+    unsigned int crop_width;
+    unsigned int crop_height;
+    unsigned int color_format;
+    unsigned int cacheable;
+    unsigned int mode_drm;
+} CSC_FORMAT;
+
+typedef struct _CSC_BUFFER {
+    void *planes[CSC_MAX_PLANES];
+    int mem_type;
+} CSC_BUFFER;
+
+typedef struct _CSC_HW_PROPERTY {
+    int fixed_node;
+    int mode_drm;
+} CSC_HW_PROPERTY;
+
+typedef struct _CSC_HANDLE {
+    CSC_FORMAT      dst_format;
+    CSC_FORMAT      src_format;
+    CSC_BUFFER      dst_buffer;
+    CSC_BUFFER      src_buffer;
+    CSC_METHOD      csc_method;
+    CSC_HW_TYPE     csc_hw_type;
+    void           *csc_hw_handle;
+    CSC_HW_PROPERTY hw_property;
+
+    /* CSC Equation */
+    CSC_EQ_MODE       csc_mode;
+    CSC_EQ_RANGE      csc_range;
+    CSC_EQ_COLORSPACE colorspace;
+} CSC_HANDLE;
 
 /*
  * change hal pixel format to omx pixel format
@@ -158,6 +240,54 @@ CSC_ERRORCODE csc_set_hw_property(
     void                *handle,
     CSC_HW_PROPERTY_TYPE property,
     int                  value);
+
+/*
+ * Get csc equation property.
+ *
+ * @param handle
+ *   CSC handle[in]
+ *
+ * @param mode
+ *   csc equation mode[out]
+ *
+ * @param colorspace
+ *   csc color space[out]
+ *
+ * @param range
+ *   csc equation range[out]
+ *
+ * @return
+ *   error code
+ */
+CSC_ERRORCODE csc_get_eq_property(
+    void              *handle,
+    CSC_EQ_MODE       *csc_mode,
+    CSC_EQ_RANGE      *csc_range,
+    CSC_EQ_COLORSPACE *colorspace);
+
+/*
+ * Set csc equation property.
+ *
+ * @param handle
+ *   CSC handle[in]
+ *
+ * @param mode
+ *   csc equation mode[in]
+ *
+ * @param colorspace
+ *   csc color space[in]
+ *
+ * @param range
+ *   csc equation range[in]
+ *
+ * @return
+ *   error code
+ */
+CSC_ERRORCODE csc_set_eq_property(
+    void              *handle,
+    CSC_EQ_MODE        csc_mode,
+    CSC_EQ_RANGE       csc_range,
+    CSC_EQ_COLORSPACE  colorspace);
 
 /*
  * Get source format.
@@ -392,6 +522,9 @@ CSC_ERRORCODE csc_set_dst_buffer(
  */
 CSC_ERRORCODE csc_convert(
     void *handle);
+
+CSC_ERRORCODE csc_convert_with_rotation(
+    void *handle, int rotation, int flip_horizontal, int flip_vertical);
 
 #ifdef __cplusplus
 }

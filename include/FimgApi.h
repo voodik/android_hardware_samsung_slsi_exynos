@@ -97,6 +97,16 @@ struct blit_op_table {
     const char *str;
 };
 
+struct compromise_param {
+    int clipW;
+    int clipH;
+    int src_fmt;
+    int dst_fmt;
+    int isScaling;
+    int isFilter;
+    int isSrcOver;
+};
+
 extern struct blit_op_table optbl[];
 
 class FimgApi
@@ -145,6 +155,17 @@ void destroyFimgApi(FimgApi *ptrFimgApi);
 extern "C"
 #endif
 int stretchFimgApi(struct fimg2d_blit *cmd);
+
+#ifdef __cplusplus
+extern "C"
+#endif
+int stretchFimgApi_fast(struct fimg2d_blit *cmd, unsigned long temp_addr, int temp_size);
+
+#ifdef __cplusplus
+extern "C"
+#endif
+int compromiseFimgApi(struct compromise_param *param);
+
 #ifdef __cplusplus
 extern "C"
 #endif
@@ -152,7 +173,7 @@ int SyncFimgApi(void);
 
 void printDataBlit(char *title, struct fimg2d_blit *cmd);
 void printDataBlitRotate(int rotate);
-void printDataBlitImage(char *title, struct fimg2d_image *image);
-void printDataBlitRect(char *title, struct fimg2d_rect *rect);
+void printDataBlitImage(const char *title, struct fimg2d_image *image);
+void printDataBlitRect(const char *title, struct fimg2d_rect *rect);
 void printDataBlitScale(struct fimg2d_scale *scaling);
 #endif //FIMG_API_H

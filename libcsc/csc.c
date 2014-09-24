@@ -39,68 +39,81 @@
 #include "exynos_format.h"
 #include "swconverter.h"
 
-#ifdef EXYNOS_OMX
-#include "Exynos_OMX_Def.h"
-#else
-#include "SEC_OMX_Def.h"
-#endif
-
 #ifdef ENABLE_FIMC
-#include "hwconverter_wrapper.h"
+#include "exynos_fimc.h"
 #endif
 
 #ifdef ENABLE_GSCALER
 #include "exynos_gscaler.h"
+#ifdef ENABLE_SCALER
+#include "exynos_scaler.h"
+#endif
 #endif
 
 #define GSCALER_IMG_ALIGN 16
-#define ALIGN(x, a)       (((x) + (a) - 1) & ~((a) - 1))
+#define FIMC_IMG_ALIGN_WIDTH 16
+#define FIMC_IMG_ALIGN_HEIGHT 2
+#define MFC_IMG_ALIGN_WIDTH 16
 
-typedef enum _CSC_PLANE {
-    CSC_Y_PLANE = 0,
-    CSC_RGB_PLANE = 0,
-    CSC_U_PLANE = 1,
-    CSC_UV_PLANE = 1,
-    CSC_V_PLANE = 2
-} CSC_PLANE;
+static CSC_ERRORCODE copy_mfc_data(CSC_HANDLE *handle) {
+    CSC_ERRORCODE ret = CSC_ErrorNone;
 
-typedef enum _CSC_HW_TYPE {
-    CSC_HW_TYPE_FIMC = 0,
-    CSC_HW_TYPE_GSCALER
-} CSC_HW_TYPE;
+    int i;
+    char *pSrc = NULL;
+    char *pDst = NULL;
 
-typedef struct _CSC_FORMAT {
-    unsigned int width;
-    unsigned int height;
-    unsigned int crop_left;
-    unsigned int crop_top;
-    unsigned int crop_width;
-    unsigned int crop_height;
-    unsigned int color_format;
-    unsigned int cacheable;
-    unsigned int mode_drm;
-} CSC_FORMAT;
+    switch (handle->src_format.color_format) {
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_P_M:
+    case HAL_PIXEL_FORMAT_EXYNOS_YV12_M:
+        pSrc = (char *)handle->src_buffer.planes[CSC_Y_PLANE];
+        pDst = (char *)handle->dst_buffer.planes[CSC_Y_PLANE];
+        for (i = 0; i < (int)handle->src_format.crop_height; i++) {
+            memcpy(pDst + (handle->src_format.crop_width * i),
+                   pSrc + (handle->src_format.width * i),
+                   handle->src_format.crop_width);
+        }
 
-typedef struct _CSC_BUFFER {
-    void *planes[CSC_MAX_PLANES];
-    int mem_type;
-} CSC_BUFFER;
+        pSrc = (char *)handle->src_buffer.planes[CSC_U_PLANE];
+        pDst = (char *)handle->dst_buffer.planes[CSC_U_PLANE];
+        for (i = 0; i < (int)(handle->src_format.crop_height >> 1); i++) {
+            memcpy(pDst + ((handle->src_format.crop_width >> 1) * i),
+                   pSrc + (ALIGN((handle->src_format.crop_width >> 1), MFC_IMG_ALIGN_WIDTH) * i),
+                   (handle->src_format.crop_width >> 1));
+        }
 
-typedef struct _CSC_HW_PROPERTY {
-    int fixed_node;
-    int mode_drm;
-} CSC_HW_PROPERTY;
+        pSrc = (char *)handle->src_buffer.planes[CSC_V_PLANE];
+        pDst = (char *)handle->dst_buffer.planes[CSC_V_PLANE];
+        for (i = 0; i < (int)(handle->src_format.crop_height >> 1); i++) {
+            memcpy(pDst + ((handle->src_format.crop_width >> 1) * i),
+                   pSrc + (ALIGN((handle->src_format.crop_width >> 1), MFC_IMG_ALIGN_WIDTH) * i),
+                   (handle->src_format.crop_width >> 1));
+        }
+        break;
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCrCb_420_SP_M:
+        pSrc = (char *)handle->src_buffer.planes[CSC_Y_PLANE];
+        pDst = (char *)handle->dst_buffer.planes[CSC_Y_PLANE];
+        for (i = 0; i < (int)handle->src_format.crop_height; i++) {
+            memcpy(pDst + (handle->src_format.crop_width * i),
+                   pSrc + (handle->src_format.width * i),
+                   handle->src_format.crop_width);
+        }
 
-typedef struct _CSC_HANDLE {
-    CSC_FORMAT      dst_format;
-    CSC_FORMAT      src_format;
-    CSC_BUFFER      dst_buffer;
-    CSC_BUFFER      src_buffer;
-    CSC_METHOD      csc_method;
-    CSC_HW_TYPE     csc_hw_type;
-    void           *csc_hw_handle;
-    CSC_HW_PROPERTY hw_property;
-} CSC_HANDLE;
+        pSrc = (char *)handle->src_buffer.planes[CSC_UV_PLANE];
+        pDst = (char *)handle->dst_buffer.planes[CSC_UV_PLANE];
+        for (i = 0; i < (int)(handle->src_format.crop_height >> 1); i++) {
+            memcpy(pDst + (handle->src_format.crop_width * i),
+                   pSrc + (handle->src_format.width * i),
+                   handle->src_format.crop_width);
+        }
+        break;
+    default:
+        ret = CSC_ErrorUnsupportFormat;
+        break;
+    }
+
+    return ret;
+}
 
 /* source is RGB888 */
 static CSC_ERRORCODE conv_sw_src_argb888(
@@ -109,7 +122,8 @@ static CSC_ERRORCODE conv_sw_src_argb888(
     CSC_ERRORCODE ret = CSC_ErrorNone;
 
     switch (handle->dst_format.color_format) {
-    case HAL_PIXEL_FORMAT_YCbCr_420_P:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_P:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_P_M:
         csc_ARGB8888_to_YUV420P(
             (unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
             (unsigned char *)handle->dst_buffer.planes[CSC_U_PLANE],
@@ -119,10 +133,22 @@ static CSC_ERRORCODE conv_sw_src_argb888(
             handle->src_format.height);
         ret = CSC_ErrorNone;
         break;
-    case HAL_PIXEL_FORMAT_YCbCr_420_SP:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M:
         csc_ARGB8888_to_YUV420SP_NEON(
             (unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
             (unsigned char *)handle->dst_buffer.planes[CSC_UV_PLANE],
+            (unsigned char *)handle->src_buffer.planes[CSC_RGB_PLANE],
+            handle->src_format.width,
+            handle->src_format.height);
+        ret = CSC_ErrorNone;
+        break;
+    case HAL_PIXEL_FORMAT_YV12:
+    case HAL_PIXEL_FORMAT_EXYNOS_YV12_M:
+        csc_ARGB8888_to_YUV420P(
+            (unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
+            (unsigned char *)handle->dst_buffer.planes[CSC_V_PLANE],
+            (unsigned char *)handle->dst_buffer.planes[CSC_U_PLANE],
             (unsigned char *)handle->src_buffer.planes[CSC_RGB_PLANE],
             handle->src_format.width,
             handle->src_format.height);
@@ -143,7 +169,8 @@ static CSC_ERRORCODE conv_sw_src_nv12t(
     CSC_ERRORCODE ret = CSC_ErrorNone;
 
     switch (handle->dst_format.color_format) {
-    case HAL_PIXEL_FORMAT_YCbCr_420_P:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_P:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_P_M:
         csc_tiled_to_linear_y_neon(
             (unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
             (unsigned char *)handle->src_buffer.planes[CSC_Y_PLANE],
@@ -157,7 +184,8 @@ static CSC_ERRORCODE conv_sw_src_nv12t(
             handle->src_format.height / 2);
         ret = CSC_ErrorNone;
         break;
-    case HAL_PIXEL_FORMAT_YCbCr_420_SP:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M:
         csc_tiled_to_linear_y_neon(
             (unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
             (unsigned char *)handle->src_buffer.planes[CSC_Y_PLANE],
@@ -185,19 +213,25 @@ static CSC_ERRORCODE conv_sw_src_yuv420p(
     CSC_ERRORCODE ret = CSC_ErrorNone;
 
     switch (handle->dst_format.color_format) {
-    case HAL_PIXEL_FORMAT_YCbCr_420_P:  /* bypass */
-        memcpy((unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
-               (unsigned char *)handle->src_buffer.planes[CSC_Y_PLANE],
-               handle->src_format.width * handle->src_format.height);
-        memcpy((unsigned char *)handle->dst_buffer.planes[CSC_U_PLANE],
-               (unsigned char *)handle->src_buffer.planes[CSC_U_PLANE],
-               (handle->src_format.width * handle->src_format.height) >> 2);
-        memcpy((unsigned char *)handle->dst_buffer.planes[CSC_V_PLANE],
-               (unsigned char *)handle->src_buffer.planes[CSC_V_PLANE],
-               (handle->src_format.width * handle->src_format.height) >> 2);
-        ret = CSC_ErrorNone;
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_P:    /* bypass */
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_P_M:
+        if (handle->src_buffer.mem_type == CSC_MEMORY_MFC) {
+            ret = copy_mfc_data(handle);
+        } else {
+            memcpy((unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
+                   (unsigned char *)handle->src_buffer.planes[CSC_Y_PLANE],
+                   handle->src_format.width * handle->src_format.height);
+            memcpy((unsigned char *)handle->dst_buffer.planes[CSC_U_PLANE],
+                   (unsigned char *)handle->src_buffer.planes[CSC_U_PLANE],
+                   (handle->src_format.width * handle->src_format.height) >> 2);
+            memcpy((unsigned char *)handle->dst_buffer.planes[CSC_V_PLANE],
+                   (unsigned char *)handle->src_buffer.planes[CSC_V_PLANE],
+                   (handle->src_format.width * handle->src_format.height) >> 2);
+            ret = CSC_ErrorNone;
+        }
         break;
-    case HAL_PIXEL_FORMAT_YCbCr_420_SP:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M:
         memcpy((unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
                (unsigned char *)handle->src_buffer.planes[CSC_Y_PLANE],
                handle->src_format.width * handle->src_format.height);
@@ -216,6 +250,50 @@ static CSC_ERRORCODE conv_sw_src_yuv420p(
     return ret;
 }
 
+/* source is YVU420P */
+static CSC_ERRORCODE conv_sw_src_yvu420p(
+    CSC_HANDLE *handle)
+{
+    CSC_ERRORCODE ret = CSC_ErrorNone;
+
+    switch (handle->dst_format.color_format) {
+    case HAL_PIXEL_FORMAT_YV12:  /* bypass */
+    case HAL_PIXEL_FORMAT_EXYNOS_YV12_M:
+        if (handle->src_buffer.mem_type == CSC_MEMORY_MFC) {
+            ret = copy_mfc_data(handle);
+        } else {
+            memcpy((unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
+                   (unsigned char *)handle->src_buffer.planes[CSC_Y_PLANE],
+                   handle->src_format.width * handle->src_format.height);
+            memcpy((unsigned char *)handle->dst_buffer.planes[CSC_U_PLANE],
+                   (unsigned char *)handle->src_buffer.planes[CSC_U_PLANE],
+                   (handle->src_format.width * handle->src_format.height) >> 2);
+            memcpy((unsigned char *)handle->dst_buffer.planes[CSC_V_PLANE],
+                   (unsigned char *)handle->src_buffer.planes[CSC_V_PLANE],
+                   (handle->src_format.width * handle->src_format.height) >> 2);
+            ret = CSC_ErrorNone;
+        }
+        break;
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M:
+        memcpy((unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
+               (unsigned char *)handle->src_buffer.planes[CSC_Y_PLANE],
+               handle->src_format.width * handle->src_format.height);
+        csc_interleave_memcpy_neon(
+            (unsigned char *)handle->dst_buffer.planes[CSC_UV_PLANE],
+            (unsigned char *)handle->src_buffer.planes[CSC_V_PLANE],
+            (unsigned char *)handle->src_buffer.planes[CSC_U_PLANE],
+            (handle->src_format.width * handle->src_format.height) >> 2);
+        ret = CSC_ErrorNone;
+        break;
+    default:
+        ret = CSC_ErrorUnsupportFormat;
+        break;
+    }
+
+    return ret;
+}
+
 /* source is YUV420SP */
 static CSC_ERRORCODE conv_sw_src_yuv420sp(
     CSC_HANDLE *handle)
@@ -223,7 +301,22 @@ static CSC_ERRORCODE conv_sw_src_yuv420sp(
     CSC_ERRORCODE ret = CSC_ErrorNone;
 
     switch (handle->dst_format.color_format) {
-    case HAL_PIXEL_FORMAT_YCbCr_420_P:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP:    /* bypass */
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M:
+        if (handle->src_buffer.mem_type == CSC_MEMORY_MFC) {
+            ret = copy_mfc_data(handle);
+        } else {
+            memcpy((unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
+                   (unsigned char *)handle->src_buffer.planes[CSC_Y_PLANE],
+                   handle->src_format.width * handle->src_format.height);
+            memcpy((unsigned char *)handle->dst_buffer.planes[CSC_UV_PLANE],
+                   (unsigned char *)handle->src_buffer.planes[CSC_UV_PLANE],
+                   handle->src_format.width * handle->src_format.height >> 1);
+            ret = CSC_ErrorNone;
+        }
+        break;
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_P:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_P_M:
         memcpy((unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
                (unsigned char *)handle->src_buffer.planes[CSC_Y_PLANE],
                handle->src_format.width * handle->src_format.height);
@@ -234,13 +327,69 @@ static CSC_ERRORCODE conv_sw_src_yuv420sp(
             handle->src_format.width * handle->src_format.height >> 1);
         ret = CSC_ErrorNone;
         break;
-    case HAL_PIXEL_FORMAT_YCbCr_420_SP: /* bypass */
+    case HAL_PIXEL_FORMAT_YV12:
+    case HAL_PIXEL_FORMAT_EXYNOS_YV12_M:
         memcpy((unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
                (unsigned char *)handle->src_buffer.planes[CSC_Y_PLANE],
                handle->src_format.width * handle->src_format.height);
-        memcpy((unsigned char *)handle->dst_buffer.planes[CSC_UV_PLANE],
-               (unsigned char *)handle->src_buffer.planes[CSC_UV_PLANE],
-               handle->src_format.width * handle->src_format.height >> 1);
+        csc_deinterleave_memcpy(
+            (unsigned char *)handle->dst_buffer.planes[CSC_V_PLANE],
+            (unsigned char *)handle->dst_buffer.planes[CSC_U_PLANE],
+            (unsigned char *)handle->src_buffer.planes[CSC_UV_PLANE],
+            handle->src_format.width * handle->src_format.height >> 1);
+        ret = CSC_ErrorNone;
+        break;
+    default:
+        ret = CSC_ErrorUnsupportFormat;
+        break;
+    }
+
+    return ret;
+}
+
+/* source is YVU420SP */
+static CSC_ERRORCODE conv_sw_src_yvu420sp(
+    CSC_HANDLE *handle)
+{
+    CSC_ERRORCODE ret = CSC_ErrorNone;
+
+    switch (handle->dst_format.color_format) {
+    case HAL_PIXEL_FORMAT_YCrCb_420_SP:  /* bypass */
+    case HAL_PIXEL_FORMAT_EXYNOS_YCrCb_420_SP_M:
+        if (handle->src_buffer.mem_type == CSC_MEMORY_MFC) {
+            ret = copy_mfc_data(handle);
+        } else {
+            memcpy((unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
+                   (unsigned char *)handle->src_buffer.planes[CSC_Y_PLANE],
+                   handle->src_format.width * handle->src_format.height);
+            memcpy((unsigned char *)handle->dst_buffer.planes[CSC_UV_PLANE],
+                   (unsigned char *)handle->src_buffer.planes[CSC_UV_PLANE],
+                   handle->src_format.width * handle->src_format.height >> 1);
+            ret = CSC_ErrorNone;
+        }
+        break;
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_P:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_P_M:
+        memcpy((unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
+               (unsigned char *)handle->src_buffer.planes[CSC_Y_PLANE],
+               handle->src_format.width * handle->src_format.height);
+        csc_deinterleave_memcpy(
+            (unsigned char *)handle->dst_buffer.planes[CSC_V_PLANE],
+            (unsigned char *)handle->dst_buffer.planes[CSC_U_PLANE],
+            (unsigned char *)handle->src_buffer.planes[CSC_UV_PLANE],
+            handle->src_format.width * handle->src_format.height >> 1);
+        ret = CSC_ErrorNone;
+        break;
+    case HAL_PIXEL_FORMAT_YV12:
+    case HAL_PIXEL_FORMAT_EXYNOS_YV12_M:
+        memcpy((unsigned char *)handle->dst_buffer.planes[CSC_Y_PLANE],
+               (unsigned char *)handle->src_buffer.planes[CSC_Y_PLANE],
+               handle->src_format.width * handle->src_format.height);
+        csc_deinterleave_memcpy(
+            (unsigned char *)handle->dst_buffer.planes[CSC_U_PLANE],
+            (unsigned char *)handle->dst_buffer.planes[CSC_V_PLANE],
+            (unsigned char *)handle->src_buffer.planes[CSC_UV_PLANE],
+            handle->src_format.width * handle->src_format.height >> 1);
         ret = CSC_ErrorNone;
         break;
     default:
@@ -257,16 +406,26 @@ static CSC_ERRORCODE conv_sw(
     CSC_ERRORCODE ret = CSC_ErrorNone;
 
     switch (handle->src_format.color_format) {
-    case HAL_PIXEL_FORMAT_YCbCr_420_SP_TILED:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M_TILED:
         ret = conv_sw_src_nv12t(handle);
         break;
-    case HAL_PIXEL_FORMAT_YCbCr_420_P:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_P:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_P_M:
         ret = conv_sw_src_yuv420p(handle);
         break;
-    case HAL_PIXEL_FORMAT_YCbCr_420_SP:
+    case HAL_PIXEL_FORMAT_YV12:
+    case HAL_PIXEL_FORMAT_EXYNOS_YV12_M:
+        ret = conv_sw_src_yvu420p(handle);
+        break;
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M:
         ret = conv_sw_src_yuv420sp(handle);
         break;
-    case HAL_PIXEL_FORMAT_RGBA_8888:
+    case HAL_PIXEL_FORMAT_YCrCb_420_SP:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCrCb_420_SP_M:
+        ret = conv_sw_src_yvu420sp(handle);
+        break;
+    case HAL_PIXEL_FORMAT_BGRA_8888:
         ret = conv_sw_src_argb888(handle);
         break;
     default:
@@ -284,34 +443,26 @@ static CSC_ERRORCODE conv_hw(
     switch (handle->csc_hw_type) {
 #ifdef ENABLE_FIMC
     case CSC_HW_TYPE_FIMC:
-    {
-        void *src_addr[3];
-        void *dst_addr[3];
-        OMX_COLOR_FORMATTYPE src_omx_format;
-        OMX_COLOR_FORMATTYPE dst_omx_format;
-        src_addr[0] = handle->src_buffer.planes[CSC_Y_PLANE];
-        src_addr[1] = handle->src_buffer.planes[CSC_UV_PLANE];
-        dst_addr[0] = handle->dst_buffer.planes[CSC_Y_PLANE];
-        dst_addr[1] = handle->dst_buffer.planes[CSC_U_PLANE];
-        dst_addr[2] = handle->dst_buffer.planes[CSC_V_PLANE];
-        src_omx_format = hal_2_omx_pixel_format(handle->src_format.color_format);
-        dst_omx_format = hal_2_omx_pixel_format(handle->dst_format.color_format);
-        csc_hwconverter_convert_nv12t(
-            handle->csc_hw_handle,
-            dst_addr,
-            src_addr,
-            handle->dst_format.width,
-            handle->dst_format.height,
-            dst_omx_format,
-            src_omx_format);
+        if (exynos_fimc_convert(handle->csc_hw_handle) != 0) {
+            ALOGE("%s:: exynos_fimc_convert() fail", __func__);
+            ret = CSC_Error;
+        }
         break;
-    }
 #endif
 #ifdef ENABLE_GSCALER
     case CSC_HW_TYPE_GSCALER:
-        if (exynos_gsc_convert(handle->csc_hw_handle) != 0) {
-            ALOGE("%s:: exynos_gsc_convert() fail", __func__);
-            ret = CSC_Error;
+        if (handle->hw_property.fixed_node < CSC_HW_SC0) {
+            if (exynos_gsc_convert(handle->csc_hw_handle) != 0) {
+                ALOGE("%s:: exynos_gsc_convert() fail", __func__);
+                ret = CSC_Error;
+            }
+#ifdef ENABLE_SCALER
+        } else {
+            if (exynos_sc_convert(handle->csc_hw_handle) != 0) {
+                ALOGE("%s:: exynos_sc_convert() fail", __func__);
+                ret = CSC_Error;
+            }
+#endif
         }
         break;
 #endif
@@ -341,16 +492,27 @@ static CSC_ERRORCODE csc_init_hw(
         switch (csc_handle->csc_hw_type) {
 #ifdef ENABLE_FIMC
         case CSC_HW_TYPE_FIMC:
-            csc_handle->csc_hw_handle = csc_hwconverter_open();
+            if (csc_handle->hw_property.fixed_node >= 0)
+                csc_handle->csc_hw_handle = exynos_fimc_create_exclusive(csc_handle->hw_property.fixed_node, FIMC_M2M_MODE, 0, 0);
+            else
+            csc_handle->csc_hw_handle = exynos_fimc_create();
             ALOGV("%s:: CSC_HW_TYPE_FIMC", __func__);
             break;
 #endif
 #ifdef ENABLE_GSCALER
         case CSC_HW_TYPE_GSCALER:
-            if (csc_handle->hw_property.fixed_node >= 0)
-                csc_handle->csc_hw_handle = exynos_gsc_create_exclusive(csc_handle->hw_property.fixed_node, GSC_M2M_MODE, 0, 0);
-            else
-            csc_handle->csc_hw_handle = exynos_gsc_create();
+            if (csc_handle->hw_property.fixed_node >= 0) {
+                if (csc_handle->hw_property.fixed_node < CSC_HW_SC0)
+                    csc_handle->csc_hw_handle = exynos_gsc_create_exclusive(csc_handle->hw_property.fixed_node, GSC_M2M_MODE, 0, 0);
+#ifdef ENABLE_SCALER
+                else if (csc_handle->hw_property.fixed_node < CSC_HW_MAX)
+                    csc_handle->csc_hw_handle = exynos_sc_create(csc_handle->hw_property.fixed_node - CSC_HW_SC0);
+#endif
+                else
+                    csc_handle->csc_hw_handle = NULL;
+            } else {
+                csc_handle->csc_hw_handle = exynos_gsc_create();
+            }
             ALOGV("%s:: CSC_HW_TYPE_GSCALER", __func__);
             break;
 #endif
@@ -386,14 +548,12 @@ static CSC_ERRORCODE csc_set_format(
     csc_handle = (CSC_HANDLE *)handle;
     if (csc_handle->csc_method == CSC_METHOD_HW) {
         switch (csc_handle->csc_hw_type) {
+#ifdef ENABLE_FIMC
         case CSC_HW_TYPE_FIMC:
-            break;
-#ifdef ENABLE_GSCALER
-        case CSC_HW_TYPE_GSCALER:
-            exynos_gsc_set_src_format(
+            exynos_fimc_set_src_format(
                 csc_handle->csc_hw_handle,
-                ALIGN(csc_handle->src_format.width, GSCALER_IMG_ALIGN),
-                ALIGN(csc_handle->src_format.height, GSCALER_IMG_ALIGN),
+                ALIGN(csc_handle->src_format.width, FIMC_IMG_ALIGN_WIDTH),
+                ALIGN(csc_handle->src_format.height, FIMC_IMG_ALIGN_HEIGHT),
                 csc_handle->src_format.crop_left,
                 csc_handle->src_format.crop_top,
                 csc_handle->src_format.crop_width,
@@ -402,10 +562,10 @@ static CSC_ERRORCODE csc_set_format(
                 csc_handle->src_format.cacheable,
                 csc_handle->hw_property.mode_drm);
 
-            exynos_gsc_set_dst_format(
+            exynos_fimc_set_dst_format(
                 csc_handle->csc_hw_handle,
-                ALIGN(csc_handle->dst_format.width, GSCALER_IMG_ALIGN),
-                ALIGN(csc_handle->dst_format.height, GSCALER_IMG_ALIGN),
+                ALIGN(csc_handle->dst_format.width, FIMC_IMG_ALIGN_WIDTH),
+                ALIGN(csc_handle->dst_format.height, FIMC_IMG_ALIGN_HEIGHT),
                 csc_handle->dst_format.crop_left,
                 csc_handle->dst_format.crop_top,
                 csc_handle->dst_format.crop_width,
@@ -414,6 +574,69 @@ static CSC_ERRORCODE csc_set_format(
                 csc_handle->dst_format.cacheable,
                 csc_handle->hw_property.mode_drm,
                 0);
+            break;
+#endif
+#ifdef ENABLE_GSCALER
+        case CSC_HW_TYPE_GSCALER:
+            if (csc_handle->hw_property.fixed_node < CSC_HW_SC0) {
+                exynos_gsc_set_csc_property(
+                    csc_handle->csc_hw_handle,
+                    csc_handle->csc_mode,
+                    csc_handle->csc_range,
+                    csc_handle->colorspace);
+
+                exynos_gsc_set_src_format(
+                    csc_handle->csc_hw_handle,
+                    ALIGN(csc_handle->src_format.width, GSCALER_IMG_ALIGN),
+                    ALIGN(csc_handle->src_format.height, GSCALER_IMG_ALIGN),
+                    csc_handle->src_format.crop_left,
+                    csc_handle->src_format.crop_top,
+                    csc_handle->src_format.crop_width,
+                    csc_handle->src_format.crop_height,
+                    HAL_PIXEL_FORMAT_2_V4L2_PIX(csc_handle->src_format.color_format),
+                    csc_handle->src_format.cacheable,
+                    csc_handle->hw_property.mode_drm);
+
+                exynos_gsc_set_dst_format(
+                    csc_handle->csc_hw_handle,
+                    csc_handle->dst_format.width,
+                    csc_handle->dst_format.height,
+                    csc_handle->dst_format.crop_left,
+                    csc_handle->dst_format.crop_top,
+                    csc_handle->dst_format.crop_width,
+                    csc_handle->dst_format.crop_height,
+                    HAL_PIXEL_FORMAT_2_V4L2_PIX(csc_handle->dst_format.color_format),
+                    csc_handle->dst_format.cacheable,
+                    csc_handle->hw_property.mode_drm);
+#ifdef ENABLE_SCALER
+            } else {
+                exynos_sc_set_src_format(
+                    csc_handle->csc_hw_handle,
+                    csc_handle->src_format.width,
+                    csc_handle->src_format.height,
+                    csc_handle->src_format.crop_left,
+                    csc_handle->src_format.crop_top,
+                    csc_handle->src_format.crop_width,
+                    csc_handle->src_format.crop_height,
+                    HAL_PIXEL_FORMAT_2_V4L2_PIX(csc_handle->src_format.color_format),
+                    csc_handle->src_format.cacheable,
+                    csc_handle->hw_property.mode_drm,
+                    1);
+
+                exynos_sc_set_dst_format(
+                    csc_handle->csc_hw_handle,
+                    csc_handle->dst_format.width,
+                    csc_handle->dst_format.height,
+                    csc_handle->dst_format.crop_left,
+                    csc_handle->dst_format.crop_top,
+                    csc_handle->dst_format.crop_width,
+                    csc_handle->dst_format.crop_height,
+                    HAL_PIXEL_FORMAT_2_V4L2_PIX(csc_handle->dst_format.color_format),
+                    csc_handle->dst_format.cacheable,
+                    csc_handle->hw_property.mode_drm,
+                    1);
+#endif
+            }
             break;
 #endif
         default:
@@ -437,12 +660,23 @@ static CSC_ERRORCODE csc_set_buffer(
     csc_handle = (CSC_HANDLE *)handle;
     if (csc_handle->csc_method == CSC_METHOD_HW) {
         switch (csc_handle->csc_hw_type) {
+#ifdef ENABLE_FIMC
         case CSC_HW_TYPE_FIMC:
+            exynos_fimc_set_src_addr(csc_handle->csc_hw_handle, csc_handle->src_buffer.planes, csc_handle->src_buffer.mem_type, -1);
+            exynos_fimc_set_dst_addr(csc_handle->csc_hw_handle, csc_handle->dst_buffer.planes, csc_handle->dst_buffer.mem_type, -1);
             break;
+#endif
 #ifdef ENABLE_GSCALER
         case CSC_HW_TYPE_GSCALER:
-            exynos_gsc_set_src_addr(csc_handle->csc_hw_handle, csc_handle->src_buffer.planes, csc_handle->src_buffer.mem_type, -1);
-            exynos_gsc_set_dst_addr(csc_handle->csc_hw_handle, csc_handle->dst_buffer.planes, csc_handle->dst_buffer.mem_type, -1);
+            if (csc_handle->hw_property.fixed_node < CSC_HW_SC0) {
+                exynos_gsc_set_src_addr(csc_handle->csc_hw_handle, csc_handle->src_buffer.planes, csc_handle->src_buffer.mem_type, -1);
+                exynos_gsc_set_dst_addr(csc_handle->csc_hw_handle, csc_handle->dst_buffer.planes, csc_handle->dst_buffer.mem_type, -1);
+#ifdef ENABLE_SCALER
+            } else {
+                exynos_sc_set_src_addr(csc_handle->csc_hw_handle, csc_handle->src_buffer.planes, csc_handle->src_buffer.mem_type, -1);
+                exynos_sc_set_dst_addr(csc_handle->csc_hw_handle, csc_handle->dst_buffer.planes, csc_handle->dst_buffer.mem_type, -1);
+#endif
+            }
             break;
 #endif
         default:
@@ -484,12 +718,17 @@ CSC_ERRORCODE csc_deinit(
         switch (csc_handle->csc_hw_type) {
 #ifdef ENABLE_FIMC
         case CSC_HW_TYPE_FIMC:
-            csc_hwconverter_close(csc_handle->csc_hw_handle);
+            exynos_fimc_destroy(csc_handle->csc_hw_handle);
             break;
 #endif
 #ifdef ENABLE_GSCALER
         case CSC_HW_TYPE_GSCALER:
-            exynos_gsc_destroy(csc_handle->csc_hw_handle);
+            if (csc_handle->hw_property.fixed_node < CSC_HW_SC0)
+                exynos_gsc_destroy(csc_handle->csc_hw_handle);
+#ifdef ENABLE_SCALER
+            else
+                exynos_sc_destroy(csc_handle->csc_hw_handle);
+#endif
             break;
 #endif
         default:
@@ -567,6 +806,46 @@ CSC_ERRORCODE csc_set_hw_property(
         ALOGE("%s:: not supported hw property", __func__);
         ret = CSC_ErrorUnsupportFormat;
     }
+
+    return ret;
+}
+
+CSC_ERRORCODE csc_get_eq_property(
+    void              *handle,
+    CSC_EQ_MODE       *csc_mode,
+    CSC_EQ_RANGE      *csc_range,
+    CSC_EQ_COLORSPACE *colorspace)
+{
+    CSC_HANDLE *csc_handle;
+    CSC_ERRORCODE ret = CSC_ErrorNone;
+
+    if (handle == NULL)
+        return CSC_ErrorNotInit;
+
+    csc_handle = (CSC_HANDLE *)handle;
+    *csc_mode = csc_handle->csc_mode;
+    *csc_range = csc_handle->csc_range;
+    *colorspace = csc_handle->colorspace;
+
+    return ret;
+}
+
+CSC_ERRORCODE csc_set_eq_property(
+    void              *handle,
+    CSC_EQ_MODE        csc_mode,
+    CSC_EQ_RANGE       csc_range,
+    CSC_EQ_COLORSPACE  colorspace)
+{
+    CSC_HANDLE *csc_handle;
+    CSC_ERRORCODE ret = CSC_ErrorNone;
+
+    if (handle == NULL)
+        return CSC_Error;
+
+    csc_handle = (CSC_HANDLE *)handle;
+    csc_handle->csc_mode = csc_mode;
+    csc_handle->csc_range = csc_range;
+    csc_handle->colorspace = colorspace;
 
     return ret;
 }
@@ -755,12 +1034,8 @@ CSC_ERRORCODE csc_convert(
     return ret;
 }
 
-#ifdef USE_CONVERT_WITH_ROTATE
 CSC_ERRORCODE csc_convert_with_rotation(
-    void *handle,
-    int rot,
-    int flip_horiz,
-    int flip_vert)
+    void *handle, int rotation, int flip_horizontal, int flip_vertical)
 {
     CSC_HANDLE *csc_handle = (CSC_HANDLE *)handle;
     CSC_ERRORCODE ret = CSC_ErrorNone;
@@ -775,8 +1050,17 @@ CSC_ERRORCODE csc_convert_with_rotation(
     csc_set_format(csc_handle);
     csc_set_buffer(csc_handle);
 
-    exynos_gsc_set_rotation(csc_handle->csc_hw_handle,
-            rot, flip_horiz, flip_vert);
+#ifdef ENABLE_FIMC
+    exynos_fimc_set_rotation(csc_handle->csc_hw_handle, rotation, flip_horizontal, flip_vertical);
+#endif
+#ifdef ENABLE_GSCALER
+    if (csc_handle->hw_property.fixed_node < CSC_HW_SC0)
+        exynos_gsc_set_rotation(csc_handle->csc_hw_handle, rotation, flip_horizontal, flip_vertical);
+#ifdef ENABLE_SCALER
+    else
+        exynos_sc_set_rotation(csc_handle->csc_hw_handle, rotation, flip_horizontal, flip_vertical);
+#endif
+#endif
 
     if (csc_handle->csc_method == CSC_METHOD_HW)
         ret = conv_hw(csc_handle);
@@ -785,4 +1069,3 @@ CSC_ERRORCODE csc_convert_with_rotation(
 
     return ret;
 }
-#endif
