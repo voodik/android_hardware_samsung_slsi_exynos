@@ -48,6 +48,7 @@ LOCAL_C_INCLUDES := \
 	$(TOP)/hardware/samsung_slsi/$(TARGET_SOC)/include \
 	$(TOP)/hardware/samsung_slsi/$(TARGET_SOC)/libhwcmodule \
 	$(TOP)/hardware/samsung_slsi/$(TARGET_SOC)/libhwcutilsmodule \
+        $(TOP)/system/core/libsync/include \
 	$(TOP)/hardware/samsung_slsi/exynos/libmpp
 
 LOCAL_ADDITIONAL_DEPENDENCIES += \
