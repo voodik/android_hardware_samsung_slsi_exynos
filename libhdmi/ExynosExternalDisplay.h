@@ -3,8 +3,8 @@
 
 #include "ExynosHWC.h"
 #include "ExynosDisplay.h"
-#include "linux/videodev2.h"
-#include "linux/v4l2-dv-timings.h"
+#include <linux/videodev2.h>
+#include <linux/v4l2-dv-timings.h>
 
 #define NUM_VIRT_OVER_HDMI 5
 #define MAX_HDMI_VIDEO_LAYERS 1

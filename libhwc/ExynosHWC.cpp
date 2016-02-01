@@ -44,7 +44,9 @@ namespace android {
 #ifdef USES_VIRTUAL_DISPLAY
 #include "ExynosVirtualDisplayModule.h"
 #endif
+#include <sync/sync.h>
 
+#ifdef HWC_SERVICES
 void doPSRExit(struct exynos5_hwc_composer_device_1_t *pdev)
 {
     int val;
@@ -53,6 +55,7 @@ void doPSRExit(struct exynos5_hwc_composer_device_1_t *pdev)
         ioctl(pdev->primaryDisplay->mDisplayFd, S3CFB_WIN_PSR_EXIT, &val);
     }
 }
+#endif
 
 #if defined(USES_CEC)
 void handle_cec(exynos5_hwc_composer_device_1_t *pdev)
